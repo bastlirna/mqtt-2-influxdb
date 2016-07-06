@@ -2,28 +2,28 @@ const path = require("path");
 const process = require("process");
 const fs = require("fs");
 
-var logger = require("./lib/logger.js");
-var nconf = require("nconf");
+const logger = require("./lib/logger.js");
+const nconf = require("nconf");
 
-var StatsReporter = require("./lib/stats.js").StatsReporter;
-var MqttClient    = require("./lib/mqtt.js").MqttClient;
-var InfluxClient    = require("./lib/influx.js").InfluxClient;
-var MessageParser = require('./lib/parser.js').MessageParser;
+const StatsReporter = require("./lib/stats.js").StatsReporter;
+const MqttClient    = require("./lib/mqtt.js").MqttClient;
+const InfluxClient    = require("./lib/influx.js").InfluxClient;
+const MessageParser = require('./lib/parser.js').MessageParser;
 
-var log = logger("app");
+const log = logger("app");
 
 // ---
 
 log.info("Application start");
 
-// --- Load configuration ---
+// Configuration --------------------------------------------------------------
 
 nconf
     .argv()
     .env()
     .defaults({config: 'config.ini'});
 
-var configFile = path.resolve(process.cwd(), nconf.get("config"));
+const configFile = path.resolve(process.cwd(), nconf.get("config"));
 
 // check if config is accessible
 fs.accessSync(configFile, fs.R_OK);
@@ -40,34 +40,28 @@ if (nconf.get("verbose")) {
     logger.level = logger.levels.info;
 }
 
-// --- Application ---
+// Application core -----------------------------------------------------------
 
-var mqttClient = new MqttClient(nconf.get("mqtt"));
-var influxClient = new InfluxClient(nconf.get("influxdb"))
-var parser = new MessageParser(nconf.get("conversion"));
+const mqttClient = new MqttClient(nconf.get("mqtt"));
+const influxClient = new InfluxClient(nconf.get("influxdb"))
+const parser = new MessageParser(nconf.get("conversion"));
+const stats = new StatsReporter(nconf.get("global"), mqttClient, influxClient);
 
-var stats = new StatsReporter(nconf.get("global"), mqttClient, influxClient);
-
-stats.start();
-
-var topics = nconf.get("topics");
-
-for (var i in topics) {
+// subscribe
+for (var i in nconf.get("topics")) {
     mqttClient.subscribe(i);
 }
 
+// on new message
 mqttClient.on("message", (id, topic, payload) => {
-
+    // convert
     var result = parser.parse(id, topic, payload);
-
-    //console.log(result);
-
+    // store into influx
     influxClient.store(id, topic, result);
-
 });
 
+// send errors to MQTT (if teher is desired topic in config)
 var errTopic = nconf.get("global:mqtt_error_topic");
-
 if (errTopic) {
     log.info("Error topic: %s", errTopic);
 
@@ -76,6 +70,8 @@ if (errTopic) {
     });
 }
 
+// let's get started
+stats.start();
 mqttClient.connect();
 
-log.debug("Init done");
+log.debug("Application up and running...");
